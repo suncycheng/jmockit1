@@ -7,13 +7,14 @@ package mockit.internal.expectations.injection;
 import java.lang.reflect.*;
 import java.util.*;
 import java.util.concurrent.*;
-
 import javax.annotation.*;
 import javax.inject.*;
+import javax.servlet.*;
 
 import mockit.internal.expectations.mocking.*;
 import mockit.internal.state.*;
 import mockit.internal.util.*;
+import static mockit.internal.expectations.injection.InjectionPoint.*;
 
 /**
  * Holds state used throughout the injection process while it's in progress for a given set of tested objects.
@@ -21,20 +22,21 @@ import mockit.internal.util.*;
 final class InjectionState
 {
    @Nonnull private static final Map<Object, Object> globalDependencies = new ConcurrentHashMap<Object, Object>(2);
-
+   @Nonnull private final Map<Object, Object> testedObjects;
+   @Nonnull private final Map<Object, Object> instantiatedDependencies;
    @Nonnull private List<MockedType> injectables;
    @Nonnull private List<MockedType> consumedInjectables;
-   @Nonnull private final Map<Object, Object> instantiatedDependencies;
    @Nonnull final LifecycleMethods lifecycleMethods;
    private GenericTypeReflection testedTypeReflection;
    private Object currentTestClassInstance;
-   private Type typeOfInjectionPoint;
+   Type typeOfInjectionPoint;
 
    InjectionState()
    {
+      testedObjects = new HashMap<Object, Object>();
+      instantiatedDependencies = new HashMap<Object, Object>();
       injectables = Collections.emptyList();
       consumedInjectables = new ArrayList<MockedType>();
-      instantiatedDependencies = new HashMap<Object, Object>();
       lifecycleMethods = new LifecycleMethods();
    }
 
@@ -47,6 +49,20 @@ final class InjectionState
 
       if (paramTypeRedefs != null) {
          injectables.addAll(paramTypeRedefs.getInjectableParameters());
+      }
+
+      getServletConfigForInitMethodsIfAny(testClassInstance);
+   }
+
+   private void getServletConfigForInitMethodsIfAny(@Nonnull Object testClassInstance)
+   {
+      if (SERVLET_CLASS != null) {
+         for (MockedType injectable : injectables) {
+            if (injectable.declaredType == ServletConfig.class) {
+               lifecycleMethods.servletConfig = injectable.getValueToInject(testClassInstance);
+               break;
+            }
+         }
       }
    }
 
@@ -84,7 +100,7 @@ final class InjectionState
          return true;
       }
 
-      if (InjectionPoint.INJECT_CLASS != null && typeOfInjectionPoint instanceof ParameterizedType) {
+      if (INJECT_CLASS != null && typeOfInjectionPoint instanceof ParameterizedType) {
          ParameterizedType parameterizedType = (ParameterizedType) typeOfInjectionPoint;
 
          if (parameterizedType.getRawType() == Provider.class) {
@@ -106,6 +122,20 @@ final class InjectionState
       }
 
       return null;
+   }
+
+   @Nonnull
+   List<MockedType> findInjectablesByType()
+   {
+      List<MockedType> found = new ArrayList<MockedType>();
+
+      for (MockedType injectable : injectables) {
+         if (hasSameTypeAsInjectionPoint(injectable) && !consumedInjectables.contains(injectable)) {
+            found.add(injectable);
+         }
+      }
+
+      return found;
    }
 
    @Nullable
@@ -174,27 +204,49 @@ final class InjectionState
       consumedInjectables = previousConsumedInjectables;
    }
 
+   @Nullable
+   Object getTestedObject(@Nonnull Object key) { return testedObjects.get(key); }
+
+   void saveTestedObject(@Nonnull Object key, @Nonnull Object testedObject) { testedObjects.put(key, testedObject); }
+
+   @Nullable
+   Object getTestedInstance(@Nonnull Object key) { return instantiatedDependencies.get(key); }
+
    @SuppressWarnings("unchecked")
    @Nullable
-   <D> D getInstantiatedDependency(@Nonnull Object dependencyKey)
+   <D> D getGlobalDependency(@Nonnull Object key) { return (D) globalDependencies.get(key); }
+
+   @Nullable
+   Object getInstantiatedDependency(@Nonnull Object dependencyKey)
    {
+      Object testedObject = testedObjects.get(dependencyKey);
+
+      if (testedObject != null) {
+         return testedObject;
+      }
+
       Object dependency = instantiatedDependencies.get(dependencyKey);
 
       if (dependency == null) {
          dependency = globalDependencies.get(dependencyKey);
       }
 
-      return (D) dependency;
+      return dependency;
    }
 
-   void saveInstantiatedDependency(@Nonnull Object dependencyKey, @Nonnull Object dependency, boolean global)
+   void saveInstantiatedDependency(@Nonnull Object dependencyKey, @Nonnull Object dependency)
    {
-      Map<Object, Object> dependenciesCache = global ? globalDependencies : instantiatedDependencies;
-      dependenciesCache.put(dependencyKey, dependency);
+      instantiatedDependencies.put(dependencyKey, dependency);
    }
 
-   void clearInstantiatedDependencies()
+   void saveGlobalDependency(@Nonnull Object dependencyKey, @Nonnull Object dependency)
    {
+      globalDependencies.put(dependencyKey, dependency);
+   }
+
+   void clearTestedObjectsAndInstantiatedDependencies()
+   {
+      testedObjects.clear();
       instantiatedDependencies.clear();
    }
 }

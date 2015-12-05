@@ -23,21 +23,21 @@ final class ClassSelection
    private static final Pattern STAR = compile("\\*");
    private static final Pattern TEST_CLASS_NAME = compile(".+Test(\\$.+)?");
 
-   final boolean loadedOnly;
-   @Nullable private final Matcher classesToInclude;
-   @Nullable private final Matcher classesToExclude;
+   boolean loadedOnly;
+   @Nullable private Matcher classesToInclude;
+   @Nullable private Matcher classesToExclude;
    @Nullable private final Matcher testCode;
+   private boolean configurationRead;
 
    ClassSelection()
    {
-      String classes = Configuration.getProperty("classes", "");
-      loadedOnly = "loaded".equals(classes);
-      classesToInclude = loadedOnly ? null : newMatcherForClassSelection(classes);
-
-      String excludes = Configuration.getProperty("excludes", "");
-      classesToExclude = newMatcherForClassSelection(excludes);
-
-      testCode = Startup.isTestRun() ? TEST_CLASS_NAME.matcher("") : null;
+      if (Startup.isTestRun()) {
+         testCode = TEST_CLASS_NAME.matcher("");
+      }
+      else {
+         testCode = null;
+         readConfiguration();
+      }
    }
 
    @Nullable
@@ -77,36 +77,29 @@ final class ClassSelection
    {
       CodeSource codeSource = protectionDomain.getCodeSource();
 
-      if (codeSource == null || isIneligibleForSelection(className)) {
-         return false;
-      }
-
-      ClassLoader loaderOfClassToBeMeasured = protectionDomain.getClassLoader();
-
       if (
-         !canAccessJMockitFromClassToBeMeasured(loaderOfClassToBeMeasured) ||
-         !isClassAllowedByIncludesAndExcludes(className)
+         codeSource == null || isIneligibleForSelection(className) ||
+         !canAccessJMockitFromClassToBeMeasured(protectionDomain)
       ) {
          return false;
       }
 
-      URL codeSourceLocation = codeSource.getLocation();
+      URL location = findLocationInCodeSource(className, protectionDomain);
 
-      if (codeSourceLocation == null) {
-         if (loaderOfClassToBeMeasured == THIS_CLASS_LOADER) {
-            return false; // it's likely a dynamically generated class
-         }
+      if (location == null) {
+         return false;
+      }
 
-         // It's from a custom class loader, so it may exist in the classpath.
-         String classFileName = className.replace('.', '/') + ".class";
-         codeSourceLocation = THIS_CLASS_LOADER.getResource(classFileName);
-
-         if (codeSourceLocation == null) {
+      if (configurationRead) {
+         if (isClassExcludedFromCoverage(className)) {
             return false;
+         }
+         else if (classesToInclude != null) {
+            return classesToInclude.reset(className).matches();
          }
       }
 
-      return !isClassFromExternalLibrary(codeSourceLocation);
+      return !isClassFromExternalLibrary(location);
    }
 
    private static boolean isIneligibleForSelection(@Nonnull String className)
@@ -114,13 +107,17 @@ final class ClassSelection
       return
          className.charAt(0) == '[' ||
          className.startsWith("mockit.") ||
+         className.startsWith("org.hamcrest.") ||
          className.startsWith("org.junit.") || className.startsWith("junit.") ||
          className.startsWith("org.testng.") ||
+         className.startsWith("org.apache.maven.surefire.") ||
          ClassLoad.isGeneratedSubclass(className);
    }
 
-   private boolean canAccessJMockitFromClassToBeMeasured(@Nullable ClassLoader loaderOfClassToBeMeasured)
+   private boolean canAccessJMockitFromClassToBeMeasured(@Nonnull ProtectionDomain protectionDomain)
    {
+      ClassLoader loaderOfClassToBeMeasured = protectionDomain.getClassLoader();
+
       if (loaderOfClassToBeMeasured != null) {
          try {
             Class<?> thisClass = loaderOfClassToBeMeasured.loadClass(THIS_CLASS_NAME);
@@ -132,19 +129,29 @@ final class ClassSelection
       return false;
    }
 
-   private boolean isClassAllowedByIncludesAndExcludes(@Nonnull String className)
+   @Nullable
+   private URL findLocationInCodeSource(@Nonnull String className, @Nonnull ProtectionDomain protectionDomain)
    {
-      if (
-         classesToExclude != null && classesToExclude.reset(className).matches() ||
-         testCode != null && testCode.reset(className).matches()
-      ) {
-         return false;
-      }
-      else if (classesToInclude != null) {
-         return classesToInclude.reset(className).matches();
+      URL location = protectionDomain.getCodeSource().getLocation();
+
+      if (location == null) {
+         if (protectionDomain.getClassLoader() == THIS_CLASS_LOADER) {
+            return null; // it's likely a dynamically generated class
+         }
+
+         // It's from a custom class loader, so it may exist in the classpath.
+         String classFileName = className.replace('.', '/') + ".class";
+         location = THIS_CLASS_LOADER.getResource(classFileName);
       }
 
-      return true;
+      return location;
+   }
+
+   private boolean isClassExcludedFromCoverage(@Nonnull String className)
+   {
+      return
+         classesToExclude != null && classesToExclude.reset(className).matches() ||
+         testCode != null && testCode.reset(className).matches();
    }
 
    private boolean isClassFromExternalLibrary(@Nonnull URL location)
@@ -155,8 +162,29 @@ final class ClassSelection
 
       String path = location.getPath();
 
-      return
+      if (
          path.endsWith(".jar") || path.endsWith("/.cp/") ||
-         testCode != null && (path.endsWith("/test-classes/") || path.endsWith("/jmockit1.org/main/classes/"));
+         testCode != null && (path.endsWith("/test-classes/") || path.endsWith("/jmockit1.org/main/classes/"))
+      ) {
+         return true;
+      }
+
+      if (!configurationRead) {
+         readConfiguration();
+      }
+
+      return false;
+   }
+
+   private void readConfiguration()
+   {
+      String classes = Configuration.getProperty("classes", "");
+      loadedOnly = "loaded".equals(classes);
+      classesToInclude = loadedOnly ? null : newMatcherForClassSelection(classes);
+
+      String excludes = Configuration.getProperty("excludes", "");
+      classesToExclude = newMatcherForClassSelection(excludes);
+
+      configurationRead = true;
    }
 }

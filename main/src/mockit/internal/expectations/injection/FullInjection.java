@@ -6,14 +6,18 @@ package mockit.internal.expectations.injection;
 
 import java.lang.annotation.*;
 import java.lang.reflect.*;
+import java.util.logging.*;
 import javax.annotation.*;
+import javax.enterprise.context.*;
 import javax.inject.*;
 import static java.lang.reflect.Modifier.*;
 
 import mockit.internal.startup.*;
+import mockit.internal.util.*;
 import static mockit.external.asm.Opcodes.*;
 import static mockit.internal.expectations.injection.InjectionPoint.*;
 import static mockit.internal.util.ConstructorReflection.*;
+import static mockit.internal.util.Utilities.*;
 
 /**
  * Responsible for recursive injection of dependencies as requested by a {@code @Tested(fullyInitialized = true)} field.
@@ -23,45 +27,48 @@ final class FullInjection
    private static final int INVALID_TYPES = ACC_ABSTRACT + ACC_ANNOTATION + ACC_ENUM;
 
    @Nonnull private final InjectionState injectionState;
+   @Nullable private final ServletDependencies servletDependencies;
    @Nullable private final JPADependencies jpaDependencies;
 
    FullInjection(@Nonnull InjectionState injectionState)
    {
       this.injectionState = injectionState;
-      jpaDependencies = JPADependencies.createIfAvailableInClasspath(injectionState);
+      servletDependencies = SERVLET_CLASS == null ? null : new ServletDependencies(injectionState);
+      jpaDependencies = PERSISTENCE_UNIT_CLASS == null ? null : new JPADependencies(injectionState);
    }
 
    @Nullable
-   Object newInstanceCreatedWithNoArgsConstructorIfAvailable(
-      @Nonnull FieldInjection fieldInjection, @Nonnull Field fieldToBeInjected)
+   Object newInstance(@Nonnull FieldInjection fieldInjection, @Nullable String qualifiedName)
    {
+      @Nonnull Field fieldToBeInjected = fieldInjection.targetField;
+      Object dependencyKey = getDependencyKey(fieldToBeInjected, qualifiedName);
+      Object dependency = injectionState.getInstantiatedDependency(dependencyKey);
+
+      if (dependency != null) {
+         return dependency;
+      }
+
       Class<?> fieldType = fieldToBeInjected.getType();
+
+      if (fieldType == Logger.class) {
+         return Logger.getLogger(fieldInjection.nameOfTestedClass);
+      }
 
       if (!isInstantiableType(fieldType)) {
          return null;
       }
 
-      Object dependencyKey = getDependencyKey(fieldToBeInjected);
-      Object dependency = injectionState.getInstantiatedDependency(dependencyKey);
-
-      if (dependency == null) {
-         if (INJECT_CLASS != null && fieldType == Provider.class) {
-            dependency = createProviderInstance(fieldToBeInjected, dependencyKey);
-         }
-         else {
-            dependency = getOrCreateInstance(fieldType, dependencyKey);
-
-            if (dependency != null) {
-               Class<?> instantiatedClass = dependency.getClass();
-
-               if (fieldInjection.isClassFromSameModuleOrSystemAsTestedClass(instantiatedClass)) {
-                  fieldInjection.fillOutDependenciesRecursively(dependency);
-                  injectionState.lifecycleMethods.executePostConstructMethodIfAny(instantiatedClass, dependency);
-               }
-
-               injectionState.saveInstantiatedDependency(dependencyKey, dependency, false);
-            }
-         }
+      if (INJECT_CLASS != null && fieldType == Provider.class) {
+         dependency = createProviderInstance(fieldToBeInjected, dependencyKey);
+      }
+      else if (servletDependencies != null && ServletDependencies.isApplicable(fieldType)) {
+         dependency = servletDependencies.createAndRegisterDependency(fieldType);
+      }
+      else if (CONVERSATION_CLASS != null && fieldType == Conversation.class) {
+         dependency = createAndRegisterConversationInstance();
+      }
+      else {
+         dependency = createAndRegisterNewInstance(fieldInjection, dependencyKey);
       }
 
       return dependency;
@@ -85,21 +92,25 @@ final class FullInjection
    }
 
    @Nonnull
-   private Object getDependencyKey(@Nonnull Field fieldToBeInjected)
+   private Object getDependencyKey(@Nonnull Field fieldToBeInjected, @Nullable String qualifiedName)
    {
       Class<?> dependencyClass = fieldToBeInjected.getType();
 
-      if (jpaDependencies != null) {
+      if (qualifiedName != null && !qualifiedName.isEmpty()) {
+         return dependencyKey(dependencyClass, qualifiedName);
+      }
+
+      if (jpaDependencies != null && JPADependencies.isApplicable(dependencyClass)) {
          for (Annotation annotation : fieldToBeInjected.getDeclaredAnnotations()) {
             String id = JPADependencies.getDependencyIdIfAvailable(annotation);
 
             if (id != null && !id.isEmpty()) {
-               return dependencyClass.getName() + ':' + id;
+               return dependencyKey(dependencyClass, id);
             }
          }
       }
 
-      return dependencyClass;
+      return injectionState.typeOfInjectionPoint;
    }
 
    @Nonnull
@@ -116,7 +127,7 @@ final class FullInjection
             public synchronized Object get()
             {
                if (dependency == null) {
-                  dependency = getOrCreateInstance(providedClass, dependencyKey);
+                  dependency = createNewInstance(providedClass, dependencyKey);
                }
 
                return dependency;
@@ -128,14 +139,14 @@ final class FullInjection
          @Override
          public Object get()
          {
-            Object dependency = getOrCreateInstance(providedClass, dependencyKey);
+            Object dependency = createNewInstance(providedClass, dependencyKey);
             return dependency;
          }
       };
    }
 
    @Nullable
-   private Object getOrCreateInstance(@Nonnull Class<?> dependencyClass, @Nonnull Object dependencyKey)
+   private Object createNewInstance(@Nonnull Class<?> dependencyClass, @Nonnull Object dependencyKey)
    {
       if (!dependencyClass.isInterface()) {
          return newInstanceUsingDefaultConstructorIfAvailable(dependencyClass);
@@ -149,11 +160,23 @@ final class FullInjection
          }
       }
 
+      Class<?> implementationClass = findImplementationClassInClasspathIfUnique(dependencyClass);
+
+      if (implementationClass != null) {
+         return newInstanceUsingDefaultConstructorIfAvailable(implementationClass);
+      }
+
+      return null;
+   }
+
+   @Nullable
+   private static Class<?> findImplementationClassInClasspathIfUnique(@Nonnull Class<?> dependencyClass)
+   {
       ClassLoader dependencyLoader = dependencyClass.getClassLoader();
+      Class<?> implementationClass = null;
 
       if (dependencyLoader != null) {
          Class<?>[] loadedClasses = Startup.instrumentation().getInitiatedClasses(dependencyLoader);
-         Class<?> implementationClass = null;
 
          for (Class<?> loadedClass : loadedClasses) {
             if (loadedClass != dependencyClass && dependencyClass.isAssignableFrom(loadedClass)) {
@@ -164,12 +187,92 @@ final class FullInjection
                implementationClass = loadedClass;
             }
          }
-
-         if (implementationClass != null) {
-            return newInstanceUsingDefaultConstructorIfAvailable(implementationClass);
-         }
       }
 
-      return null;
+      return implementationClass;
+   }
+
+   @Nonnull
+   private Object createAndRegisterConversationInstance()
+   {
+      Conversation conversation = new Conversation() {
+         private boolean currentlyTransient = true;
+         private int counter;
+         private String currentId;
+         private long currentTimeout;
+
+         @Override
+         public void begin()
+         {
+            counter++;
+            currentId = String.valueOf(counter);
+            currentlyTransient = false;
+         }
+
+         @Override
+         public void begin(String id)
+         {
+            counter++;
+            currentId = id;
+            currentlyTransient = false;
+         }
+
+         @Override
+         public void end()
+         {
+            currentlyTransient = true;
+            currentId = null;
+         }
+
+         @Override public String getId() { return currentId; }
+         @Override public long getTimeout() { return currentTimeout; }
+         @Override public void setTimeout(long milliseconds) { currentTimeout = milliseconds; }
+         @Override public boolean isTransient() { return currentlyTransient; }
+      };
+
+      injectionState.saveInstantiatedDependency(Conversation.class, conversation);
+      return conversation;
+   }
+
+   @Nullable
+   private Object createAndRegisterNewInstance(@Nonnull FieldInjection fieldInjection, @Nonnull Object dependencyKey)
+   {
+      Class<?> fieldClass = getFieldClass(fieldInjection);
+      Object dependency = createNewInstance(fieldClass, dependencyKey);
+
+      if (dependency != null) {
+         registerNewInstance(fieldInjection, dependencyKey, dependency);
+      }
+
+      return dependency;
+   }
+
+   @Nonnull
+   private Class<?> getFieldClass(@Nonnull FieldInjection fieldInjection)
+   {
+      Field targetField = fieldInjection.targetField;
+      Type fieldType = targetField.getGenericType();
+
+      if (fieldType instanceof TypeVariable<?>) {
+         GenericTypeReflection typeReflection = new GenericTypeReflection(fieldInjection.targetClass);
+         Type resolvedType = typeReflection.resolveReturnType((TypeVariable<?>) fieldType);
+         return getClassType(resolvedType);
+      }
+
+      return targetField.getType();
+   }
+
+   private void registerNewInstance(
+      @Nonnull FieldInjection fieldInjection, @Nonnull Object dependencyKey, @Nonnull Object dependency)
+   {
+      Class<?> instantiatedClass = dependency.getClass();
+
+      if (fieldInjection.isClassFromSameModuleOrSystemAsTestedClass(instantiatedClass)) {
+         fieldInjection.fillOutDependenciesRecursively(dependency);
+         injectionState.lifecycleMethods.findLifecycleMethods(instantiatedClass);
+         injectionState.lifecycleMethods.executeInitializationMethodsIfAny(instantiatedClass, dependency);
+      }
+
+      injectionState.saveInstantiatedDependency(dependencyKey, dependency);
    }
 }

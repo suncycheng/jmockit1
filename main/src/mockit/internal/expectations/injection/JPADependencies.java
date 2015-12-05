@@ -10,8 +10,6 @@ import javax.annotation.*;
 import javax.persistence.*;
 import javax.xml.parsers.*;
 
-import static mockit.internal.expectations.injection.InjectionPoint.*;
-
 import org.xml.sax.*;
 import org.xml.sax.helpers.*;
 
@@ -21,10 +19,9 @@ import org.xml.sax.helpers.*;
  */
 final class JPADependencies
 {
-   @Nullable
-   static JPADependencies createIfAvailableInClasspath(@Nonnull InjectionState injectionState)
+   static boolean isApplicable(@Nonnull Class<?> dependencyType)
    {
-      return PERSISTENCE_UNIT_CLASS == null ? null : new JPADependencies(injectionState);
+      return dependencyType == EntityManager.class || dependencyType == EntityManagerFactory.class;
    }
 
    @Nullable
@@ -45,7 +42,7 @@ final class JPADependencies
    @Nonnull private final InjectionState injectionState;
    @Nullable private String defaultPersistenceUnitName;
 
-   private JPADependencies(@Nonnull InjectionState injectionState) { this.injectionState = injectionState; }
+   JPADependencies(@Nonnull InjectionState injectionState) { this.injectionState = injectionState; }
 
    @Nullable
    Object newInstanceIfApplicable(@Nonnull Class<?> dependencyType, @Nonnull Object dependencyKey)
@@ -61,7 +58,7 @@ final class JPADependencies
          }
 
          EntityManagerFactory emFactory = Persistence.createEntityManagerFactory(persistenceUnitName);
-         injectionState.saveInstantiatedDependency(dependencyKey, emFactory, true);
+         injectionState.saveGlobalDependency(dependencyKey, emFactory);
          return emFactory;
       }
 
@@ -126,7 +123,7 @@ final class JPADependencies
          emFactoryKey = EntityManagerFactory.class;
       }
 
-      EntityManagerFactory emFactory = injectionState.getInstantiatedDependency(emFactoryKey);
+      EntityManagerFactory emFactory = injectionState.getGlobalDependency(emFactoryKey);
 
       if (emFactory == null) {
          if (persistenceUnitName == null) {
@@ -134,7 +131,7 @@ final class JPADependencies
          }
 
          emFactory = Persistence.createEntityManagerFactory(persistenceUnitName);
-         injectionState.saveInstantiatedDependency(emFactoryKey, emFactory, true);
+         injectionState.saveGlobalDependency(emFactoryKey, emFactory);
       }
 
       return emFactory.createEntityManager();

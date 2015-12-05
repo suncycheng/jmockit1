@@ -55,6 +55,8 @@ public final class MockedClassWithSuperClassTest
       // Mocked:
       assertEquals(45, mock.doSomething());
       assertEquals(45, new Subclass().doSomething());
+
+      // Mocked and matching the recorded expectation:
       assertEquals(45, new Subclass() {}.doSomething());
 
       // Not mocked:
@@ -147,5 +149,29 @@ public final class MockedClassWithSuperClassTest
    public void mockSubclassWithConstructorContainingTryCatch_usingExpectations(@Mocked DerivedClass mock)
    {
       new DerivedClass();
+   }
+
+   static class Subclass2 extends BaseClass {}
+
+   @Test
+   public void recordSameMethodOnDifferentMockedSubclasses(@Mocked final Subclass mock1, @Mocked final Subclass2 mock2)
+   {
+      new Expectations() {{
+         mock1.doSomething(); result = 1;
+         mock2.doSomething(); result = 2;
+      }};
+
+      assertEquals(1, mock1.doSomething());
+      assertEquals(2, mock2.doSomething());
+   }
+
+   @Test
+   public void recordMethodOnMockedBaseClassButReplayOnSubclassInstance(@Mocked final BaseClass baseMock)
+   {
+      new Expectations() {{ baseMock.doSomething(); result = 45; }};
+
+      Subclass derived = new Subclass();
+      assertEquals(45, derived.doSomething());
+      assertEquals(45, baseMock.doSomething());
    }
 }

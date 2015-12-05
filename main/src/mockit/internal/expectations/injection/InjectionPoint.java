@@ -24,7 +24,8 @@ final class InjectionPoint
    @Nullable static final Class<? extends Annotation> INJECT_CLASS;
    @Nullable private static final Class<? extends Annotation> EJB_CLASS;
    @Nullable static final Class<? extends Annotation> PERSISTENCE_UNIT_CLASS;
-   @Nullable private static final Class<?> SERVLET_CLASS;
+   @Nullable static final Class<?> SERVLET_CLASS;
+   @Nullable static final Class<?> CONVERSATION_CLASS;
    static final boolean WITH_INJECTION_API_IN_CLASSPATH;
 
    static
@@ -32,13 +33,14 @@ final class InjectionPoint
       INJECT_CLASS = searchTypeInClasspath("javax.inject.Inject");
       EJB_CLASS = searchTypeInClasspath("javax.ejb.EJB");
       PERSISTENCE_UNIT_CLASS = searchTypeInClasspath("javax.persistence.PersistenceUnit");
-      SERVLET_CLASS = searchTypeInClasspath("javax.servlet.GenericServlet");
+      SERVLET_CLASS = searchTypeInClasspath("javax.servlet.Servlet");
+      CONVERSATION_CLASS = searchTypeInClasspath("javax.enterprise.context.Conversation");
       WITH_INJECTION_API_IN_CLASSPATH = INJECT_CLASS != null || PERSISTENCE_UNIT_CLASS != null;
    }
 
    static boolean isServlet(@Nonnull Class<?> aClass)
    {
-      return SERVLET_CLASS != null && GenericServlet.class.isAssignableFrom(aClass);
+      return SERVLET_CLASS != null && Servlet.class.isAssignableFrom(aClass);
    }
 
    private InjectionPoint() {}
@@ -79,13 +81,7 @@ final class InjectionPoint
          return KindOfInjectionPoint.WithValue;
       }
 
-      if (
-         isAnnotated(annotations, Resource.class) ||
-         EJB_CLASS != null && isAnnotated(annotations, EJB.class) ||
-         PERSISTENCE_UNIT_CLASS != null && (
-            isAnnotated(annotations, PersistenceContext.class) || isAnnotated(annotations, PersistenceUnit.class)
-         )
-      ) {
+      if (isRequired(annotations)) {
          return KindOfInjectionPoint.Required;
       }
 
@@ -141,6 +137,16 @@ final class InjectionPoint
       return false;
    }
 
+   private static boolean isRequired(@Nonnull Annotation[] annotations)
+   {
+      return
+         isAnnotated(annotations, Resource.class) ||
+         EJB_CLASS != null && isAnnotated(annotations, EJB.class) ||
+         PERSISTENCE_UNIT_CLASS != null && (
+            isAnnotated(annotations, PersistenceContext.class) || isAnnotated(annotations, PersistenceUnit.class)
+         );
+   }
+
    @Nullable
    static Object getValueFromAnnotation(@Nonnull Field field)
    {
@@ -170,5 +176,11 @@ final class InjectionPoint
       else {
          return ((GenericArrayType) parameterType).getGenericComponentType();
       }
+   }
+
+   @Nonnull
+   static String dependencyKey(@Nonnull Class<?> dependencyClass, @Nonnull String dependencyId)
+   {
+      return dependencyClass.getName() + ':' + dependencyId;
    }
 }

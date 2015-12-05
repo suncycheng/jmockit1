@@ -4,12 +4,8 @@
    xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
    <modelVersion>4.0.0</modelVersion>
 
-   <groupId>org.jmockit</groupId><artifactId>jmockit</artifactId><version>1.19</version>
+   <groupId>org.jmockit</groupId><artifactId>jmockit</artifactId><version>1.21</version>
    <packaging>jar</packaging>
-   <prerequisites>
-      <maven>3.2.5</maven>
-      <!-- Must run on JDK 1.8 -->
-   </prerequisites>
 
    <name>Main</name>
    <description>
@@ -79,6 +75,21 @@
          </testResource>
       </testResources>
       <plugins>
+         <plugin>
+            <artifactId>maven-enforcer-plugin</artifactId><version>1.4.1</version>
+            <executions>
+               <execution>
+                  <goals><goal>enforce</goal></goals>
+                  <configuration>
+                     <rules>
+                        <requireJavaVersion><version>1.8</version></requireJavaVersion>
+                        <requireMavenVersion><version>3.2.5</version></requireMavenVersion>
+                        <dependencyConvergence/>
+                     </rules>
+                  </configuration>
+               </execution>
+            </executions>
+         </plugin>
          <plugin>
             <artifactId>maven-compiler-plugin</artifactId><version>3.3</version>
             <configuration>
@@ -155,7 +166,7 @@
                   <phase>test</phase>
                   <goals><goal>test</goal></goals>
                   <configuration>
-                     <skipTests>false</skipTests>
+                     <skipTests>${skipTests}</skipTests>
                      <testNGArtifactName>none:none</testNGArtifactName>
                      <excludes>
                         <exclude>**/*$*</exclude>
@@ -172,7 +183,7 @@
                   <phase>test</phase>
                   <goals><goal>test</goal></goals>
                   <configuration>
-                     <skipTests>false</skipTests>
+                     <skipTests>${skipTests}</skipTests>
                      <junitArtifactName>none:none</junitArtifactName>
                      <includes>
                         <include>**/testng/*Test.class</include>
@@ -187,21 +198,16 @@
          </plugin>
          <plugin>
             <artifactId>maven-gpg-plugin</artifactId><version>1.6</version>
-            <configuration>
-               <executable>/gnupg/pub/gpg</executable>
-               <homedir>/gnupg/mykey</homedir>
-               <useAgent>true</useAgent>
-            </configuration>
             <executions>
                <execution>
                   <id>sign-artifacts</id>
+                  <phase>deploy</phase>
                   <goals><goal>sign</goal></goals>
                </execution>
             </executions>
          </plugin>
          <plugin>
-            <groupId>org.sonatype.plugins</groupId>
-            <artifactId>nexus-staging-maven-plugin</artifactId>
+            <groupId>org.sonatype.plugins</groupId><artifactId>nexus-staging-maven-plugin</artifactId>
             <version>1.6.5</version>
             <extensions>true</extensions>
             <configuration>
@@ -226,20 +232,20 @@
          <groupId>org.testng</groupId><artifactId>testng</artifactId><version>6.9.6</version>
          <optional>true</optional>
          <exclusions>
+            <exclusion><groupId>com.google.inject</groupId><artifactId>guice</artifactId></exclusion>
             <exclusion><groupId>org.beanshell</groupId><artifactId>bsh</artifactId></exclusion>
+            <exclusion><groupId>org.apache.ant</groupId><artifactId>ant</artifactId></exclusion>
+            <exclusion><groupId>org.yaml</groupId><artifactId>snakeyaml</artifactId></exclusion>
+            <exclusion><groupId>junit</groupId><artifactId>junit</artifactId></exclusion>
          </exclusions>
       </dependency>
       <dependency>
-         <groupId>javax.persistence</groupId><artifactId>persistence-api</artifactId><version>1.0</version>
+         <groupId>javax</groupId><artifactId>javaee-api</artifactId><version>7.0</version>
          <optional>true</optional>
-      </dependency>
-      <dependency>
-         <groupId>javax.servlet</groupId><artifactId>servlet-api</artifactId><version>2.5</version>
-         <optional>true</optional>
-      </dependency>
-      <dependency>
-         <groupId>javax</groupId><artifactId>javaee-api</artifactId><version>6.0</version>
-         <optional>true</optional>
+         <exclusions>
+            <exclusion><groupId>com.sun.mail</groupId><artifactId>javax.mail</artifactId></exclusion>
+            <exclusion><groupId>javax.activation</groupId><artifactId>activation</artifactId></exclusion>
+         </exclusions>
       </dependency>
    </dependencies>
 </project>

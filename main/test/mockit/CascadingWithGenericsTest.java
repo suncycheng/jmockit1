@@ -4,6 +4,7 @@
  */
 package mockit;
 
+import java.io.*;
 import java.util.*;
 import java.util.Map.*;
 import java.util.concurrent.*;
@@ -30,6 +31,7 @@ public final class CascadingWithGenericsTest
       { return null; }
 
       Callable<Baz> returnGenericTypeWithTypeArgument() { return null; }
+      Bar bar() { return null; }
    }
 
    static class Bar
@@ -147,10 +149,7 @@ public final class CascadingWithGenericsTest
       @Mocked Foo foo, @Mocked final Baz cascadedBaz) throws Exception
    {
       final Date date = new Date();
-
-      new Expectations() {{
-         cascadedBaz.getDate(); result = date;
-      }};
+      new Expectations() {{ cascadedBaz.getDate(); result = date; }};
 
       Callable<Baz> callable = foo.returnGenericTypeWithTypeArgument();
       Baz baz = callable.call();
@@ -171,5 +170,30 @@ public final class CascadingWithGenericsTest
 
       assertNotNull(saved);
       assertNotSame(value, saved);
+   }
+
+   public interface GenericInterfaceWithBoundedTypeParameter<B extends Serializable> { B get(int id); }
+
+   @Test
+   public <T extends Serializable> void cascadeFromMethodReturningATypeVariable(
+      @Mocked final GenericInterfaceWithBoundedTypeParameter<T> mock)
+   {
+      new Expectations() {{
+         mock.get(1); result = "test";
+         mock.get(2); result = null;
+      }};
+
+      assertEquals("test", mock.get(1));
+      assertNull(mock.get(2));
+   }
+
+   static class TypeWithUnusedTypeParameterInGenericMethod { @SuppressWarnings("unused") <U> Foo foo() {return null;} }
+
+   @Test
+   public void cascadeFromMethodHavingUnusedTypeParameter(@Mocked TypeWithUnusedTypeParameterInGenericMethod mock)
+   {
+      Foo foo = mock.foo();
+      Bar bar = foo.bar();
+      assertNotNull(bar);
    }
 }

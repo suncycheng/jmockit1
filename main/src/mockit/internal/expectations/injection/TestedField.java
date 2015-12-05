@@ -17,7 +17,7 @@ final class TestedField
    @Nonnull final InjectionState injectionState;
    @Nonnull private final Field testedField;
    @Nonnull private final Tested metadata;
-   @Nonnull private final TestedObjectCreation testedObjectCreation;
+   @Nullable private final TestedObjectCreation testedObjectCreation;
    @Nullable private List<Field> targetFields;
    private boolean createAutomatically;
    boolean requireDIAnnotation;
@@ -27,7 +27,16 @@ final class TestedField
       this.injectionState = injectionState;
       testedField = field;
       this.metadata = metadata;
-      testedObjectCreation = new TestedObjectCreation(injectionState, field);
+
+      Class<?> fieldType = field.getType();
+
+      if (fieldType.isInterface()) {
+         testedObjectCreation = null;
+      }
+      else {
+         testedObjectCreation = new TestedObjectCreation(injectionState, field);
+         injectionState.lifecycleMethods.findLifecycleMethods(fieldType);
+      }
    }
 
    boolean isAvailableDuringSetup() { return metadata.availableDuringSetup(); }
@@ -45,6 +54,37 @@ final class TestedField
          return;
       }
 
+      injectionState.setTestedField(testedField);
+
+      Object testedObject = getTestedObjectFromFieldInTestClassIfApplicable(testClassInstance);
+      Class<?> testedClass = testedField.getType();
+
+      if (testedObject == null && createAutomatically) {
+         if (reusePreviouslyCreatedInstance(testClassInstance, testedClass)) {
+            return;
+         }
+
+         if (testedObjectCreation != null) {
+            testedObject = testedObjectCreation.create();
+            setFieldValue(testedField, testClassInstance, testedObject);
+            injectionState.saveTestedObject(testedClass, testedObject);
+         }
+      }
+      else if (testedObject != null) {
+         String dependencyKey = InjectionPoint.dependencyKey(testedClass, testedField.getName());
+         injectionState.saveTestedObject(dependencyKey, testedObject);
+         testedClass = testedObject.getClass();
+      }
+
+      if (testedObject != null) {
+         performFieldInjection(testedClass, testedObject);
+         executeInitializationMethodsIfAny(testedClass, testedObject);
+      }
+   }
+
+   @Nullable
+   private Object getTestedObjectFromFieldInTestClassIfApplicable(@Nonnull Object testClassInstance)
+   {
       Object testedObject = null;
 
       if (!createAutomatically) {
@@ -52,38 +92,44 @@ final class TestedField
          createAutomatically = testedObject == null && !isFinal(testedField.getModifiers());
       }
 
-      injectionState.setTestedField(testedField);
+      return testedObject;
+   }
 
-      Class<?> testedClass;
+   private boolean reusePreviouslyCreatedInstance(@Nonnull Object testClassInstance, @Nonnull Class<?> testedClass)
+   {
+      Object previousInstance = injectionState.getTestedInstance(testedClass);
 
+      if (previousInstance != null) {
+         setFieldValue(testedField, testClassInstance, previousInstance);
+         return true;
+      }
+
+      return false;
+   }
+
+   private void performFieldInjection(@Nonnull Class<?> testedClass, @Nonnull Object testedObject)
+   {
+      FieldInjection fieldInjection = new FieldInjection(this, testedClass, metadata.fullyInitialized());
+
+      if (targetFields == null) {
+         targetFields = fieldInjection.findAllTargetInstanceFieldsInTestedClassHierarchy(testedClass);
+         requireDIAnnotation = fieldInjection.requireDIAnnotation;
+      }
+
+      fieldInjection.injectIntoEligibleFields(targetFields, testedObject);
+   }
+
+   private void executeInitializationMethodsIfAny(@Nonnull Class<?> testedClass, @Nonnull Object testedObject)
+   {
       if (createAutomatically) {
-         testedClass = testedField.getType();
-         testedObject = testedObjectCreation.create();
-         setFieldValue(testedField, testClassInstance, testedObject);
-      }
-      else {
-         testedClass = testedObject == null ? null : testedObject.getClass();
-      }
-
-      if (testedObject != null) {
-         FieldInjection fieldInjection = new FieldInjection(this, testedClass, metadata.fullyInitialized());
-
-         if (targetFields == null) {
-            targetFields = fieldInjection.findAllTargetInstanceFieldsInTestedClassHierarchy(testedClass);
-         }
-
-         fieldInjection.injectIntoEligibleFields(targetFields, testedObject);
-
-         if (createAutomatically) {
-            injectionState.lifecycleMethods.executePostConstructMethodIfAny(testedClass, testedObject);
-         }
+         injectionState.lifecycleMethods.executeInitializationMethodsIfAny(testedClass, testedObject);
       }
    }
 
    void clearIfAutomaticCreation()
    {
       if (createAutomatically) {
-         injectionState.clearInstantiatedDependencies();
+         injectionState.clearTestedObjectsAndInstantiatedDependencies();
 
          if (!isAvailableDuringSetup()) {
             Object testClassInstance = injectionState.getCurrentTestClassInstance();

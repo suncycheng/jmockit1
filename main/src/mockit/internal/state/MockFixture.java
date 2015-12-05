@@ -103,7 +103,7 @@ public final class MockFixture
 
    public void registerMockedClass(@Nonnull Class<?> mockedType)
    {
-      if (!containsReference(mockedClasses, mockedType)) {
+      if (!isMockedClass(mockedType)) {
          if (Proxy.isProxyClass(mockedType)) {
             mockedType = mockedType.getInterfaces()[0];
          }
@@ -177,8 +177,15 @@ public final class MockFixture
    @Nullable
    public InstanceFactory findInstanceFactory(@Nonnull Type mockedType)
    {
-      Class<?> mockedClass = getClassType(mockedType);
       InstanceFactory instanceFactory = mockedTypesAndInstances.get(mockedType);
+
+      if (instanceFactory != null) {
+         return instanceFactory;
+      }
+
+      Class<?> mockedClass = getClassType(mockedType);
+      //noinspection ReuseOfLocalVariable
+      instanceFactory = mockedTypesAndInstances.get(mockedClass);
 
       if (instanceFactory != null) {
          return instanceFactory;
@@ -423,5 +430,16 @@ public final class MockFixture
       }
 
       return null;
+   }
+
+   public boolean areCapturedClasses(@Nonnull Class<?> mockedClass1, @Nonnull Class<?> mockedClass2)
+   {
+      for (CaptureTransformer<?> captureTransformer : captureTransformers) {
+         if (captureTransformer.areCapturedClasses(mockedClass1, mockedClass2)) {
+            return true;
+         }
+      }
+
+      return false;
    }
 }
